@@ -739,6 +739,37 @@
     .form-row { grid-template-columns: 1fr; }
   }
 </style>
+
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc, setDoc as fsSetDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    // ── PASTE YOUR FIREBASE CONFIG HERE ──────────────────────────────────────
+    const firebaseConfig = {
+      apiKey: "AIzaSyADfd4FK9umnRpgjUWE7ns8JXtp7C5fc0I",
+      authDomain: "jays-tickets.firebaseapp.com",
+      projectId: "jays-tickets",
+      storageBucket: "jays-tickets.firebasestorage.app",
+      messagingSenderId: "920897811753",
+      appId: "1:920897811753:web:898b4ef9212b0b1d8c7338"
+    };
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // Expose to global scope so legacy scripts can call them
+    window._db = db;
+    window._col = (name) => collection(db, name);
+    window._doc = (col, id) => doc(db, col, id);
+    window._setDoc = setDoc;
+    window._deleteDoc = deleteDoc;
+    window._getDoc = getDoc;
+    window._onSnapshot = onSnapshot;
+    window._firebaseReady = true;
+    window.dispatchEvent(new Event('firebaseReady'));
+  </script>
 </head>
 <body>
 
@@ -790,6 +821,7 @@
         <option value="">All Partners</option>
       </select>
     </div>
+    <div id="pastNote" style="display:none;font-size:12px;color:var(--grey-dark);margin-bottom:8px;"></div>
 
     <div class="ticket-grid" id="ticketGrid"></div>
   </div>
@@ -1102,6 +1134,7 @@
       </div>
       <div style="display:flex;gap:10px;">
         <button class="btn btn-ghost btn-sm" onclick="showView('browse')">← Back to Board</button>
+        <button class="btn btn-ghost btn-sm" onclick="seedDatabase()" title="Push default schedule to database — first run only">⬆ Seed DB</button>
         <button class="btn btn-primary btn-sm" onclick="openAddModal()">+ List a Ticket</button>
       </div>
     </div>
@@ -1357,6 +1390,9 @@ let tickets = [
   { id: 'g72', owner: 'fm',  date: '2026-09-27', opponent: 'Cincinnati Reds',       section: '227', row: '', seats: '', qty: 2, type: 'sale', price: 300, notes: 'Sunday — final home series.' },
 ];
 
+// Live tickets — populated by Firestore real-time listener
+let tickets = [];
+
 let currentPartner = null;
 let editingTicketId = null;
 let importBuffer = [];
@@ -1389,13 +1425,70 @@ function injectPhotos() {
   }
 }
 
-window.addEventListener('DOMContentLoaded', () => {
+// ── FIREBASE BOOT ────────────────────────────────────────────────────────────
+function bootApp() {
   injectPhotos();
-  buildPartnerList();
   buildOwnerFilter();
-  renderTickets();
-  // Hide login on boot — user hasn't asked for it yet
+  showView('pitch');
   document.getElementById('loginView').classList.remove('active');
+
+  // Real-time listener on tickets collection
+  const ticketsCol = window._col('tickets');
+  window._onSnapshot(ticketsCol, (snapshot) => {
+    tickets = [];
+    snapshot.forEach(docSnap => {
+      tickets.push({ id: docSnap.id, ...docSnap.data() });
+    });
+    // Sort by date
+    tickets.sort((a, b) => a.date.localeCompare(b.date));
+    renderTickets();
+    if (currentPartner) renderMyTickets();
+    buildPartnerList();
+  });
+
+  // Load partner settings from Firestore if available
+  window._getDoc(window._doc('settings', 'partners')).then(snap => {
+    if (snap.exists()) {
+      const data = snap.data();
+      if (data.partners) {
+        PARTNERS.length = 0;
+        data.partners.forEach(p => PARTNERS.push(p));
+        buildOwnerFilter();
+        buildPartnerList();
+      }
+    }
+  }).catch(() => {
+    // Firestore not configured yet — run on local data
+    buildPartnerList();
+    renderTickets();
+  });
+}
+
+function seedDatabase() {
+  if (!confirm('This will push the full 2026 schedule to the database. Only do this once. Continue?')) return;
+  DEFAULT_TICKETS.forEach(t => {
+    window._setDoc(window._doc('tickets', t.id), t).catch(console.error);
+  });
+  showToast('Schedule seeded to database.');
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  if (window._firebaseReady) {
+    bootApp();
+  } else {
+    window.addEventListener('firebaseReady', bootApp);
+    // Fallback: if Firebase fails to load, run on local data after 3s
+    setTimeout(() => {
+      if (!window._firebaseReady) {
+        console.warn('Firebase not configured — running on local data.');
+        injectPhotos();
+        buildPartnerList();
+        buildOwnerFilter();
+        renderTickets();
+        document.getElementById('loginView').classList.remove('active');
+      }
+    }, 3000);
+  }
 });
 
 // ── PARTNER / AUTH ────────────────────────────────────────────────────────────
@@ -1501,6 +1594,18 @@ function renderTickets() {
     return matchSearch && matchType && matchOwner;
   });
 
+  // Count how many were hidden due to past date (before today filter)
+  const allMatchingFilters = tickets.filter(t => {
+    const matchSearch = !search || t.date.includes(search) || t.opponent.toLowerCase().includes(search) || t.section.includes(search);
+    const matchType = !typeF || t.type === typeF;
+    const matchOwner = !ownerF || t.owner === ownerF;
+    return matchSearch && matchType && matchOwner;
+  });
+  const pastCount = allMatchingFilters.length - filtered.length;
+  const noteEl = document.getElementById('pastNote');
+  if (noteEl) noteEl.style.display = pastCount > 0 ? '' : 'none';
+  if (noteEl && pastCount > 0) noteEl.textContent = `${pastCount} past game${pastCount>1?'s':''} not shown.`;
+
   if (!filtered.length) {
     grid.innerHTML = `<div class="empty-state"><div class="icon">🎟</div><h3>No tickets found</h3><p>Try adjusting your filters.</p></div>`;
     return;
@@ -1511,7 +1616,8 @@ function renderTickets() {
 function renderMyTickets() {
   if (!currentPartner) return;
   const grid = document.getElementById('myTicketGrid');
-  const mine = tickets.filter(t => t.owner === currentPartner.id);
+  const todayM = new Date(); todayM.setHours(0,0,0,0);
+  const mine = tickets.filter(t => t.owner === currentPartner.id && new Date(t.date + 'T12:00:00') >= todayM);
   document.getElementById('manageSubtitle').textContent = `Logged in as ${currentPartner.name}`;
   document.getElementById('statTotal').textContent = mine.length;
   document.getElementById('statSale').textContent = mine.filter(t => t.type==='sale'||t.type==='both').length;
@@ -1620,27 +1726,44 @@ function saveTicket() {
     notes: document.getElementById('f_notes').value.trim(),
   };
   if (!t.date || !t.opponent || !t.section) { showToast('Please fill in date, opponent, and section.'); return; }
-  if (editingTicketId) {
-    const idx = tickets.findIndex(x => x.id === editingTicketId);
-    tickets[idx] = { ...tickets[idx], ...t };
-    showToast('Listing updated.');
+  const id = editingTicketId || ('t' + Date.now());
+  if (!editingTicketId) t.owner = currentPartner.id;
+  else {
+    const existing = tickets.find(x => x.id === editingTicketId);
+    t.owner = existing ? existing.owner : currentPartner.id;
+  }
+  t.id = id;
+  if (window._firebaseReady) {
+    window._setDoc(window._doc('tickets', id), t)
+      .then(() => showToast(editingTicketId ? 'Listing updated.' : 'Ticket listed!'))
+      .catch(() => showToast('Save failed — check connection.'));
   } else {
-    t.id = 't' + Date.now();
-    t.owner = currentPartner.id;
-    tickets.push(t);
-    showToast('Ticket listed successfully!');
+    // Fallback local
+    if (editingTicketId) {
+      const idx = tickets.findIndex(x => x.id === id);
+      tickets[idx] = { ...tickets[idx], ...t };
+    } else {
+      tickets.push(t);
+    }
+    renderMyTickets();
+    renderTickets();
+    showToast(editingTicketId ? 'Listing updated.' : 'Ticket listed!');
   }
   closeModal('ticketModal');
-  renderMyTickets();
-  renderTickets();
 }
 
 function deleteTicket(id) {
   if (!confirm('Remove this listing?')) return;
-  tickets = tickets.filter(t => t.id !== id);
-  showToast('Listing removed.');
-  renderMyTickets();
-  renderTickets();
+  if (window._firebaseReady) {
+    window._deleteDoc(window._doc('tickets', id))
+      .then(() => showToast('Listing removed.'))
+      .catch(() => showToast('Delete failed — check connection.'));
+  } else {
+    tickets = tickets.filter(t => t.id !== id);
+    showToast('Listing removed.');
+    renderMyTickets();
+    renderTickets();
+  }
 }
 
 // ── INTEREST ──────────────────────────────────────────────────────────────────
@@ -1751,11 +1874,17 @@ function parseCSV(file) {
 
 function confirmImport() {
   if (!importBuffer.length) return;
-  tickets = [...tickets, ...importBuffer];
+  if (window._firebaseReady) {
+    Promise.all(importBuffer.map(t => window._setDoc(window._doc('tickets', t.id), t)))
+      .then(() => showToast(`${importBuffer.length} ticket(s) imported to database.`))
+      .catch(() => showToast('Import failed — check connection.'));
+  } else {
+    tickets = [...tickets, ...importBuffer];
+    renderTickets();
+    if (currentPartner) renderMyTickets();
+    showToast(`${importBuffer.length} ticket(s) imported.`);
+  }
   closeModal('importModal');
-  showToast(`${importBuffer.length} ticket(s) imported.`);
-  renderTickets();
-  if (currentPartner) renderMyTickets();
 }
 
 // ── UTILS ─────────────────────────────────────────────────────────────────────
