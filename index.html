@@ -755,22 +755,9 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
 
-    // Expose helpers to match existing code
+    // Expose db to global scope
     window._db = db;
-    window._col = (name) => db.collection(name);
-    window._doc = (col, id) => db.collection(col).doc(id);
-    window._setDoc = (ref, data) => ref.set(data);
-    window._deleteDoc = (ref) => ref.delete();
-    window._getDoc = (ref) => ref.get();
-    window._onSnapshot = (ref, cb) => {
-      ref.onSnapshot(snapshot => {
-        // Normalise to same shape as modular SDK
-        snapshot.forEach = snapshot.forEach.bind(snapshot);
-        cb(snapshot);
-      });
-    };
     window._firebaseReady = true;
-    window.dispatchEvent(new Event('firebaseReady'));
   </script>
 </head>
 <body>
@@ -1431,67 +1418,58 @@ function injectPhotos() {
 function bootApp() {
   injectPhotos();
   buildOwnerFilter();
+  buildPartnerList();
   showView('pitch');
   document.getElementById('loginView').classList.remove('active');
 
-  // Real-time listener on tickets collection (compat SDK)
-  window._col('tickets').onSnapshot((snapshot) => {
+  if (!window._firebaseReady || !window._db) {
+    // Firebase not available — render local default tickets
+    tickets = DEFAULT_TICKETS.slice();
+    renderTickets();
+    return;
+  }
+
+  const db = window._db;
+
+  // Real-time listener — updates all open browsers instantly
+  db.collection('tickets').onSnapshot((snapshot) => {
     tickets = [];
-    snapshot.forEach(docSnap => {
-      tickets.push({ id: docSnap.id, ...docSnap.data() });
-    });
+    snapshot.forEach(doc => tickets.push({ id: doc.id, ...doc.data() }));
     tickets.sort((a, b) => a.date.localeCompare(b.date));
     renderTickets();
     if (currentPartner) renderMyTickets();
     buildPartnerList();
   }, (err) => {
     console.error('Firestore error:', err);
-    showToast('Database connection error — check console.');
+    // Fall back to default data so the page isn't empty
+    tickets = DEFAULT_TICKETS.slice();
+    renderTickets();
   });
 
-  // Load partner settings from Firestore if available
-  window._doc('settings', 'partners').get().then(snap => {
+  // Load partner settings if stored
+  db.collection('settings').doc('partners').get().then(snap => {
     if (snap.exists) {
       const data = snap.data();
-      if (data.partners) {
+      if (data && data.partners) {
         PARTNERS.length = 0;
         data.partners.forEach(p => PARTNERS.push(p));
         buildOwnerFilter();
         buildPartnerList();
       }
     }
-  }).catch(() => {
-    // Firestore not configured yet — run on local data
-    buildPartnerList();
-    renderTickets();
-  });
+  }).catch(err => console.warn('Settings load failed:', err));
 }
 
 function seedDatabase() {
   if (!confirm('This will push the full 2026 schedule to the database. Only do this once. Continue?')) return;
   DEFAULT_TICKETS.forEach(t => {
-    window._doc('tickets', t.id).set(t).catch(console.error);
+    window._db.collection('tickets').doc(t.id).set(t).catch(console.error);
   });
   showToast('Schedule seeded to database.');
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-  if (window._firebaseReady) {
-    bootApp();
-  } else {
-    window.addEventListener('firebaseReady', bootApp);
-    // Fallback: if Firebase fails to load, run on local data after 3s
-    setTimeout(() => {
-      if (!window._firebaseReady) {
-        console.warn('Firebase not configured — running on local data.');
-        injectPhotos();
-        buildPartnerList();
-        buildOwnerFilter();
-        renderTickets();
-        document.getElementById('loginView').classList.remove('active');
-      }
-    }, 3000);
-  }
+  bootApp();
 });
 
 // ── PARTNER / AUTH ────────────────────────────────────────────────────────────
@@ -1737,7 +1715,7 @@ function saveTicket() {
   }
   t.id = id;
   if (window._firebaseReady) {
-    window._doc('tickets', id).set(t)
+    window._db.collection('tickets').doc(id).set(t)
       .then(() => showToast(editingTicketId ? 'Listing updated.' : 'Ticket listed!'))
       .catch(() => showToast('Save failed — check connection.'));
   } else {
@@ -1758,7 +1736,7 @@ function saveTicket() {
 function deleteTicket(id) {
   if (!confirm('Remove this listing?')) return;
   if (window._firebaseReady) {
-    window._doc('tickets', id).delete()
+    window._db.collection('tickets').doc(id).delete()
       .then(() => showToast('Listing removed.'))
       .catch(() => showToast('Delete failed — check connection.'));
   } else {
@@ -1878,7 +1856,7 @@ function parseCSV(file) {
 function confirmImport() {
   if (!importBuffer.length) return;
   if (window._firebaseReady) {
-    Promise.all(importBuffer.map(t => window._doc('tickets', t.id).set(t)))
+    Promise.all(importBuffer.map(t => window._db.collection('tickets').doc(t.id).set(t)))
       .then(() => showToast(`${importBuffer.length} ticket(s) imported to database.`))
       .catch(() => showToast('Import failed — check connection.'));
   } else {
