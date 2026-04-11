@@ -1600,10 +1600,20 @@ function deleteTicket(id) {
 }
 
 function seedDatabase() {
-  if (!confirm('Push the full 2026 schedule to the database? Only do this once.')) return;
-  Promise.all(DEFAULT_TICKETS.map(t => db.collection('tickets').doc(t.id).set(t)))
-    .then(() => showToast('Schedule seeded to database!'))
-    .catch(err => { console.error(err); showToast('Seed failed — check console.'); });
+  if (!confirm('This will DELETE all existing tickets and reload the full 2026 schedule. Continue?')) return;
+  // First load all existing docs, delete them, then re-seed
+  db.collection('tickets').get().then(snapshot => {
+    const deletes = [];
+    snapshot.forEach(doc => deletes.push(doc.ref.delete()));
+    return Promise.all(deletes);
+  }).then(() => {
+    return Promise.all(DEFAULT_TICKETS.map(t => db.collection('tickets').doc(t.id).set(t)));
+  }).then(() => {
+    showToast('Database reset and re-seeded!');
+  }).catch(err => {
+    console.error(err);
+    showToast('Seed failed — check console.');
+  });
 }
 
 // ── INTEREST ──────────────────────────────────────────────────────────────────
