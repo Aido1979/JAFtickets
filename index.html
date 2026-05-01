@@ -1099,7 +1099,7 @@
         <div class="section-subtitle">Browse tickets available to buy or trade from our group</div>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <button class="btn btn-ghost btn-sm" onclick="openImportModal()">⬆ Import CSV</button>
+        <button class="btn btn-ghost btn-sm" id="importCsvBtn" style="display:none" onclick="openImportModal()">⬆ Import CSV</button>
         <button class="btn btn-primary btn-sm" id="addTicketBtn" style="display:none" onclick="openAddModal()">+ List a Ticket</button>
       </div>
     </div>
@@ -1190,7 +1190,7 @@
       </div>
       <div class="form-group" id="priceGroup">
         <label>Asking Price (per ticket)</label>
-        <input type="number" id="f_price" placeholder="e.g. 300" min="0">
+        <input type="number" id="f_price" placeholder="e.g. 269.98" min="0">
       </div>
     </div>
     <div class="form-group"><label>Notes (optional)</label><textarea id="f_notes" placeholder="e.g. Great seats, includes parking pass..."></textarea></div>
@@ -1459,6 +1459,7 @@ function confirmLogin() {
   document.getElementById('logoutBtn').style.display = '';
   document.getElementById('manageBtn').style.display = '';
   document.getElementById('addTicketBtn').style.display = '';
+  document.getElementById('importCsvBtn').style.display = '';
   const badge = document.getElementById('partnerBadge');
   badge.style.display = 'flex';
   document.getElementById('partnerBadgeName').textContent = currentPartner.name;
@@ -1471,6 +1472,7 @@ function logout() {
   document.getElementById('logoutBtn').style.display = 'none';
   document.getElementById('manageBtn').style.display = 'none';
   document.getElementById('addTicketBtn').style.display = 'none';
+  document.getElementById('importCsvBtn').style.display = 'none';
   document.getElementById('partnerBadge').style.display = 'none';
   showView('browse');
   showToast('Signed out.');
@@ -1675,6 +1677,7 @@ function sendInterest() {
 
 // ── CSV IMPORT ────────────────────────────────────────────────────────────────
 function openImportModal() {
+  if (!currentPartner) { openLogin(); return; }
   importBuffer = [];
   document.getElementById('importPreview').style.display = 'none';
   document.getElementById('confirmImportBtn').disabled = true;
